@@ -7,8 +7,7 @@
 - init分支包含最基础功能，刚开始开发从init分支拉取
 - master分支为功能完善的完整源代码
 - dev分支为基于init分支而正在开发的分支
-- [学习文档地址](http://[输入链接说明](https://b11et3un53m.feishu.cn/wiki/wikcnrigEuKkRaba6YaZubSuINf))
-
+- [学习文档地址](https://b11et3un53m.feishu.cn/wiki/wikcnrigEuKkRaba6YaZubSuINf)
  **🌟对你有帮助的话麻烦点个星星🌟** 
 #### 项目简介
 天机学堂是一个基于微服务架构的生产级在线教育项目，核心用户不是K12群体，而是面向成年人的非学历职业技能培训平台。相比之前的项目课程，其业务完整度、真实度、复杂度都非常的高，与企业真实项目非常接近。
