@@ -51,7 +51,6 @@ public class PointsBoardServiceImpl extends ServiceImpl<PointsBoardMapper, Point
         boolean isCurrent = seasonId == null || seasonId == 0;
         //3.查询本人的赛季排名和分数
         PointsBoard pointsBoard = !isCurrent ? queryMyHistoryPoints(seasonId, user) : queryMyCurrentPoints(user);
-
         List<PointsBoard> pointsBoards = null;
         if(!isCurrent){
             //4.分页查询历史赛季排行榜，fromDB

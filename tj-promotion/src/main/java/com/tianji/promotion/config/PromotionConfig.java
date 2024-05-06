@@ -16,7 +16,7 @@ public class PromotionConfig {
      * 生成兑换码的线程池
      * @return
      */
-    @Bean //这里可以写@Bean("线程池id")，可以不加id，那么该线程池默认的名称就是方法名称: generateExchangeCodeExecutor
+    @Bean //这里可以写@Bean("线程池id")，可以不加id，那么该线程池默认id就是方法名称: generateExchangeCodeExecutor
     public Executor generateExchangeCodeExecutor(){
         ThreadPoolTaskExecutor executor = new ThreadPoolTaskExecutor();
         // 1.核心线程池大小

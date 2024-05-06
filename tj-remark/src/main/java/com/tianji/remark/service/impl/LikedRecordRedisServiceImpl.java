@@ -55,7 +55,7 @@ public class LikedRecordRedisServiceImpl extends ServiceImpl<LikedRecordMapper, 
         if(!flag){
             return;
         }
-        //3.在Redis点赞记录表中统计业务id的点赞数(统计人数)
+        //3.在Redis点赞记录表中统计该业务id的总点赞数(统计人数)
         String key = RedisConstants.LIKE_BIZ_KEY_PREFIX + dto.getBizId();
         Long totalLikedNum = redisTemplate.boundSetOps(key).size();
         if(totalLikedNum == null){
@@ -66,6 +66,11 @@ public class LikedRecordRedisServiceImpl extends ServiceImpl<LikedRecordMapper, 
         redisTemplate.boundZSetOps(bizTypeKey).add(dto.getBizId().toString(), totalLikedNum);
     }
 
+    /**
+     * 获取当前点过赞的业务id集合
+     * @param ids 前端传入回答、笔记、评论的id集合，该id集合是当前页面的
+     * @return 当前用户点过赞的业务id集合
+     */
     @Override
     public Set<Long> getLikedStatusByBizList(List<Long> ids) {
         if(CollUtils.isEmpty(ids)){
@@ -78,7 +83,7 @@ public class LikedRecordRedisServiceImpl extends ServiceImpl<LikedRecordMapper, 
             StringRedisConnection src = (StringRedisConnection) connection;
             for (Long bizId : ids) {
                 String key = RedisConstants.LIKE_BIZ_KEY_PREFIX + bizId;
-                src.sIsMember(key, userId.toString());
+                src.sIsMember(key, userId.toString()); //sIsMember判断当前用户id作为value是否在该业务列表里
             }
             return null;
         });
@@ -93,7 +98,7 @@ public class LikedRecordRedisServiceImpl extends ServiceImpl<LikedRecordMapper, 
     public void readLikedTimesAndSendMessage(String bizType, int maxBizSize) {
         //1.查询redis中30个业务id
         String typeKey = RedisConstants.LIKE_COUNT_KEY_PREFIX + bizType;
-        Set<ZSetOperations.TypedTuple<String>> typedTuples = redisTemplate.boundZSetOps(typeKey).popMin(maxBizSize);
+        Set<ZSetOperations.TypedTuple<String>> typedTuples = redisTemplate.boundZSetOps(typeKey).popMin(maxBizSize); //读取30个评论的总点赞，并删除redis中的
         if(CollUtils.isEmpty(typedTuples)){
             return;
         }
@@ -120,7 +125,7 @@ public class LikedRecordRedisServiceImpl extends ServiceImpl<LikedRecordMapper, 
     private boolean unLiked(Long user, LikeRecordFormDTO dto) {
         //Redis中移除点赞
         String key = RedisConstants.LIKE_BIZ_KEY_PREFIX + dto.getBizId();
-        Long result = redisTemplate.boundSetOps(key).remove(user.toString());
+        Long result = redisTemplate.boundSetOps(key).remove(user.toString()); //没点过赞返回0，成功返回1
         //如果result大于0，说明该点赞已经被移除
         return result != null && result > 0;
     }
@@ -128,8 +133,8 @@ public class LikedRecordRedisServiceImpl extends ServiceImpl<LikedRecordMapper, 
     private boolean liked(Long user, LikeRecordFormDTO dto) {
         //判断该业务id是否已经点过赞，没有则添加点赞
         String key = RedisConstants.LIKE_BIZ_KEY_PREFIX + dto.getBizId();
-        Long result = redisTemplate.boundSetOps(key).add(user.toString());
-        //如果result大于0，说明该业务id已经点过赞
+        Long result = redisTemplate.boundSetOps(key).add(user.toString()); //已点过赞返回0，成功返回1
+        //如果result等于0，说明该业务id已经点过赞
         return result != null && result > 0;
     }
 }

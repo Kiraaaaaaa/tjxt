@@ -24,7 +24,7 @@ import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 @Component
-@Aspect
+@Aspect //标识为切面类
 @RequiredArgsConstructor
 public class MyLockAspect implements Ordered {
     private final MyLockFactory myLockFactory;
@@ -55,7 +55,7 @@ public class MyLockAspect implements Ordered {
     }
 
     /**
-     * 设置该切面优先级，值越小优先级越高
+     * 设置该切面注解优先级，值越小优先级越高
      * @return
      */
     @Override

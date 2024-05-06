@@ -99,6 +99,7 @@ public class UserCouponMqServiceImpl extends ServiceImpl<UserCouponMapper, UserC
         /*if(coupon.getStatus() != CouponStatus.ISSUING.getValue()){
             throw new BadRequestException("只有发放中的优惠券才能领取");
         }*/
+
         //4.是否符合优惠券领取时间
         LocalDateTime now = LocalDateTime.now();
         if(now.isBefore(coupon.getIssueBeginTime()) || now.isAfter(coupon.getIssueEndTime())){
@@ -106,26 +107,26 @@ public class UserCouponMqServiceImpl extends ServiceImpl<UserCouponMapper, UserC
         }
         //5.优惠券是否有库存
         Integer totalNum = coupon.getTotalNum();
-        Integer issueNum = coupon.getIssueNum();
         //由于查询是否有库存是从redis查询，而redis保存的totalNum是剩余的可领取优惠券数量，领一张就-1，最小为0
         if(totalNum <= 0){
             throw new BadRequestException("优惠券已经抢完");
         }
         //6.校验限领数量
         Long user = UserContext.getUser();
-        //6.1尝试扣减Redis中用户已领优惠券的数量
+        //6.1先尝试增加Redis中用户已领优惠券的数量
         String ukey = PromotionConstants.USER_COUPON_CACHE_KEY_PREFIX + couponId;
         //使用increment对当前用户的已领数量+1，如果是第一次领取就是初始化为1，如果不是第一次领取就是+1
         Long count = redisTemplate.boundHashOps(ukey).increment(user.toString(), 1);
         //6.2校验限领数量
         //increment返回的数量就是领取后的数量，大于限领数量则不允许领取
         if(count > coupon.getUserLimit()){
-            throw new BadRequestException("不能超过最大领取数量");
+            throw new BadRequestException("不能超过最大领取数量"); //不用回滚count，已领数量在redis中+1不影响业务
         }
 
-        //7.扣减该优惠券库存
+        //7.redis中扣减该优惠券库存
         String ckey = PromotionConstants.COUPON_CACHE_KEY_PREFIX + couponId;
         redisTemplate.boundHashOps(ckey).increment("totalNum", -1);
+
         /*Integer userLimit = coupon.getUserLimit();
         Integer count = lambdaQuery()
                 .eq(UserCoupon::getCouponId, couponId)
@@ -206,14 +207,15 @@ public class UserCouponMqServiceImpl extends ServiceImpl<UserCouponMapper, UserC
         常规如果要使用AOP是基于路径的，这里采用注解的方式，更加方便简洁，
         所以直接在checkAndCreateUserCoupon方法上添加自己的自定义注解即可，*/
 
-        //由于修改优惠券领取数量和保存用户优惠券领取记录变成了发送MQ消息，进行异步执行，所以不需要在这里进行DB操作了
-        /*//从AOP上下文对象中获取当前类的代理对象，然后强转为UserCouponServiceImpl类型
-        IUserCouponService userCouponService = (IUserCouponService) AopContext.currentProxy();
-        //此时代理对象就能执行被AOP代理过的方法，执行事务
-        userCouponService.checkAndCreateUserCoupon(user, coupon, null);
-*/
+        /* 从AOP上下文对象中获取当前类的代理对象，然后强转为UserCouponServiceImpl类型
+            IUserCouponService userCouponService = (IUserCouponService) AopContext.currentProxy();
+            //此时代理对象就能执行被AOP代理过的方法，执行事务
+            userCouponService.checkAndCreateUserCoupon(user, coupon, null);
+        */
 
-        //8.发送MQ消息，用于修改优惠券领取数量和保存用户优惠券领取记录
+        //由于修改优惠券领取数量和保存用户优惠券领取记录变成了发送MQ消息，进行异步执行，所以不需要使用代理类了
+
+        //8.发送MQ消息持久化DB，修改优惠券领取数量和保存用户优惠券领取记录
         UserCouponDTO msg = new UserCouponDTO();
         msg.setUserId(user);
         msg.setCouponId(couponId);
@@ -221,6 +223,11 @@ public class UserCouponMqServiceImpl extends ServiceImpl<UserCouponMapper, UserC
         log.debug("发送领券消息：{}", msg);
     }
 
+    /**
+     * 从redis查询优惠券信息，并将map转对象返回
+     * @param couponId
+     * @return
+     */
     private Coupon queryCouponByCache(Long couponId) {
         //1.获取该优惠券的key
         String key = PromotionConstants.COUPON_CACHE_KEY_PREFIX + couponId;
@@ -233,8 +240,13 @@ public class UserCouponMqServiceImpl extends ServiceImpl<UserCouponMapper, UserC
         return BeanUtils.mapToBean(map, Coupon.class, false, CopyOptions.create());
     }
 
+    //todo 验证兑换码还需要优化，使用MQ+LUA
     @Override
-    // @Transactional (取消掉事务，将事务写在锁住的地方，优先获取锁再开启事务)
+    /**
+     * 如果这里不加事务注解，checkAndCreateUserCoupon()方法的事务会失效
+     * 因为非事务方法调用事务方法会导致事务失效，但如果添加上又回到了
+     */
+    // @Transactional
     public void exchangeCoupon(String code) {
         //1.检验参数
         if(code == null){
@@ -260,7 +272,8 @@ public class UserCouponMqServiceImpl extends ServiceImpl<UserCouponMapper, UserC
             if(now.isAfter(codeDB.getExpiredTime())){
                 throw new BizIllegalException("兑换码已经过期");
             }
-            //校验兑换码并生成用户券（）
+
+            //校验兑换码并生成用户券
             //查询优惠券信息
             Long user = UserContext.getUser();
             Long couponId = codeDB.getExchangeTargetId();
@@ -274,6 +287,16 @@ public class UserCouponMqServiceImpl extends ServiceImpl<UserCouponMapper, UserC
                 7.保存兑换记录
                 8.修改优惠券已兑换数量
                 9.更新兑换码数据   */
+
+            /**
+             * 注意这里调用不能写成synchronized代码块，尽管锁必须在事务之前才不会导致事务重复提交
+             * 因为还有个事务失效问题，因为这个方法不是事务控制的，所以会导致被调用方法的事务失效
+             * 如果该方法加入了事务注解，那顺序又变成了事务在前了，又会导致事务重复提交
+             */
+
+            /**
+             * 当然也有解决办法，详见UserCouponRedissonCustomeServiceImpl
+             */
             checkAndCreateUserCoupon(user, coupon, id);
 
         }catch (Exception e){
@@ -304,26 +327,27 @@ public class UserCouponMqServiceImpl extends ServiceImpl<UserCouponMapper, UserC
          * 但是这里不管是多位用户还是单个用户的并发都会调用这个方法，如果锁住所有调用，
          * 那么会导致所有用户都要等待，所以，我们需要给synchronized一个条件，锁住的条件就是user相同的情况，
          */
+
         /*synchronized (user.toString().intern()){ //由于Long类型有享元模式，所有先转换为String类型，然后intern()从常量池中取同一地址
-            // 所有db操作
+            // 这里写以下的所有代码
         }*/
 
-        /*但是以上同样有问题，因为当前synchronized块是在事务里的，其实多个线程在开启事务的时候不会冲突，
-        假设此时同一用户有两个并发请求，同时开启了两个线程，这两个线程都开启了事务，
-        此时线程1在事务内获取到了锁，那么他会执行锁住的方法，线程2在事务内获取不到锁，
-        当线程1的锁释放后，但此时还未提交事务，此时线程2拿到锁，也执行了一次锁住的方法，
-        那么当线程1此时提交事务后，线程2又提交了一次，就重复提交了两次事务，这就冲突了，
-        所以，需要在事务提交之前，获取锁，当事务提交之后，释放锁，
+        /*但是以上同样有问题，因为当前synchronized块是在事务里的，多个线程在开启事务的时候不会冲突，
+        假设此时同一用户同时有两个请求，这两个线程都进入到了该方法并开启了事务，
+        此时线程1在事务内获取到了锁，那么他会执行锁住的方法，线程2在事务内获取不到锁会一直自旋，
+        当线程1的锁释放后，但此时还未提交事务，此时线程2拿到锁，也执行了一次锁住的方法，并且得到数据仍然是线程1操作前的数据
+        那么当线程1此时提交事务后，线程2又提交了一次，就重复提交了两次事务，这就冲突了，相当于一个用户执行了两次本方法，造成超领
+        所以，需要在事务提交之前，先获取锁，当事务提交之后，释放锁，
         代码就需要改造，将事务写在锁住的地方，优先获取锁再开启事务*/
 
-        //优惠券是否达到领取上限
+        //每位用户可兑换的优惠券是否达到上限
         Integer userLimit = coupon.getUserLimit();
         Integer count = lambdaQuery()
                 .eq(UserCoupon::getCouponId, coupon.getId())
                 .eq(UserCoupon::getUserId, user)
                 .count();
         if(count != null && count >= userLimit){
-            throw new BadRequestException("超过领取上限");
+            throw new BadRequestException("该用户超过兑换上限");
         }
         //保存用户优惠券领取记录
         saveUserCoupon(coupon, user);
@@ -359,12 +383,13 @@ public class UserCouponMqServiceImpl extends ServiceImpl<UserCouponMapper, UserC
     }
 
     /**
-     * 保存用户优惠券领取记录、更新优惠券领取数量
+     * 保存用户优惠券领取记录、更新优惠券领取数量（MQ+Redis版）
      */
     @Override
     @Transactional // 先获取锁，再开启事务，避免重复事务提交
     // 这里就不用加锁了，因为这是由用户领券发送的MQ消息到监听器执行的，锁应该加到在这之前，即在开始监测领券的时候，receiveCoupon方法
-    //此处name是固定的，如果要动态获取到user，则需要使用#{user}占位符，而#{user}是一个SPEL表达式，如果需要实现需要在MyLockAspect中添加解析
+
+    //解释加锁：此处name是固定的，如果要动态获取到user，则需要使用#{user}占位符，而#{user}是一个SPEL表达式，如果需要实现需要在MyLockAspect中添加解析
     // @MyLock(name = "lock:coupon:uid:#{user}", myLockType = MyLockType.RE_ENTRANT_LOCK, myLockStrategy = MyLockStrategy.FAIL_AFTER_RETRY_TIMEOUT)
         public void checkAndCreateUserCouponNew(UserCouponDTO dto) {
 
@@ -378,6 +403,7 @@ public class UserCouponMqServiceImpl extends ServiceImpl<UserCouponMapper, UserC
          * 但是这里不管是多位用户还是单个用户的并发都会调用这个方法，如果锁住所有调用，
          * 那么会导致所有用户都要等待，所以，我们需要给synchronized一个条件，锁住的条件就是user相同的情况，
          */
+
         /*synchronized (user.toString().intern()){ //由于Long类型有享元模式，所有先转换为String类型，然后intern()从常量池中取同一地址
             // 所有db操作
         }*/
@@ -418,7 +444,7 @@ public class UserCouponMqServiceImpl extends ServiceImpl<UserCouponMapper, UserC
         }
 
         //todo 兑换兑换码还需要更新兑换码
-        //如果是兑换码，则将DB中的兑换码状态置为已兑换
+        //如果是兑换码，还需要将DB中的兑换码状态置为已兑换
         /*if(codeId != null){
             exchangeCodeService.lambdaUpdate()
                     .eq(ExchangeCode::getId, codeId)
@@ -428,13 +454,18 @@ public class UserCouponMqServiceImpl extends ServiceImpl<UserCouponMapper, UserC
         }*/
     }
 
+    /**
+     * 预下单页中查询可用优惠券方案
+     * @param orderCourses 订单课程集合
+     * @return 优惠券方案集合
+     */
     @Override
     public List<CouponDiscountDTO> findDiscountSolution(List<OrderCourseDTO> orderCourses) {
-        //1.查询用户可用的优惠券，条件：1.该用户2.用户券状态为未使用。查询表coupon和user_coupon，关联条件coupon_id。
+        //1.查询用户可用的优惠券，条件：1.该用户的2.用户券状态为未使用。查询表coupon和user_coupon，关联条件coupon_id。
         //得到用户可使用的优惠券集合，所需字段：1.优惠券id，2.优惠券规则，3.优惠券折扣值，4.优惠券门槛，5.优惠券最大折金额，6.优惠券最大优惠金额，7.【用户券id】(返回给前端核销时使用的)
         List<Coupon> coupons = baseMapper.queryMyCoupons(UserContext.getUser());
 
-        //2.初筛，过滤掉优惠券规则不满足的优惠券，条件：优惠券门槛不超过订单总价
+        //2.【初筛】，过滤掉优惠券规则不满足的优惠券，条件：优惠券门槛不超过订单总价
         //2.1计算订单总价
         int totalNum = orderCourses.stream().mapToInt(OrderCourseDTO::getPrice).sum();
         //2.1筛选出该订单可用券
@@ -445,7 +476,7 @@ public class UserCouponMqServiceImpl extends ServiceImpl<UserCouponMapper, UserC
         if(CollUtils.isEmpty(availableCoupons)){
             return CollUtils.emptyList();
         }
-        //3.细筛，筛选出优惠券的全排列组合，组合包含单券和多券两种组合，多券组合为某张优惠券下可用的课程id列表，单券组合为所有优惠券集合
+        //3.【细筛】，筛选出优惠券的全排列组合，组合包含单券和多券两种组合，多券组合为某张优惠券下可用的课程id列表，单券组合为所有优惠券集合
         //3.1获取到每一张可用的优惠券可用课程集合的集合
         Map<Coupon, List<OrderCourseDTO>> availableCouponsMap = findAvailableCoupons(availableCoupons, orderCourses);
         //通过优惠券可用分类细筛后如果没有可用的优惠券则直接返回
@@ -470,27 +501,27 @@ public class UserCouponMqServiceImpl extends ServiceImpl<UserCouponMapper, UserC
             list.add(calculateSolutionDiscount(availableCouponsMap, orderCourses, couponList));
         }*/
         //5.改造第4步为【多线程并行】查询每种方案
-        List<CouponDiscountDTO> list = Collections.synchronizedList(new ArrayList<>(solutions.size())); //线程安全的集合
-        CountDownLatch countDownLatch = new CountDownLatch(solutions.size());
+        List<CouponDiscountDTO> list = Collections.synchronizedList(new ArrayList<>(solutions.size())); //使用线程安全的集合
+        CountDownLatch countDownLatch = new CountDownLatch(solutions.size()); //设置值为方案数的计数器
         for (List<Coupon> solution : solutions) {
             CompletableFuture.supplyAsync(new Supplier<CouponDiscountDTO>() {
                 @Override
                 public CouponDiscountDTO get() {
-                    //参数：1.优惠券可优惠课程2.购买的课程集合3.优惠券排列方案
+                    //参数：1.优惠券可优惠课程2.购买的课程集合（用于记录各课程优惠明细）3.优惠券排列方案
                     //返回值：该优惠券组合或者单券的优惠情况
                     CouponDiscountDTO dto = calculateSolutionDiscount(availableCouponsMap, orderCourses, solution);
                     return dto;
                 }
-            }, discountSolutionExecutor).thenAccept(new Consumer<CouponDiscountDTO>() { //接收优惠情况，但无返回值
+            }, discountSolutionExecutor).thenAccept(new Consumer<CouponDiscountDTO>() { //thenAccept接收参数，但无返回值
                 @Override
                 public void accept(CouponDiscountDTO couponDiscountDTO) {
                     list.add(couponDiscountDTO); //将该优惠情况加入到优惠方案集合中
-                    // countDownLatch.countDown(); // 可加可不加，因为规定了超时两秒后取消阻塞
+                    countDownLatch.countDown(); //完成一个任务计数器就减一
                 }
             });
         }
         try{
-            //两秒都还没有结果就取消计数器阻塞状态继续执行
+            //如果等待任务计算已经超过两秒还没有结果，就取消计数器阻塞状态继续执行
             countDownLatch.await(2, TimeUnit.SECONDS);
         }catch (InterruptedException e){
             log.error("优惠券方案计算出现错误", e.getMessage());
@@ -574,9 +605,9 @@ public class UserCouponMqServiceImpl extends ServiceImpl<UserCouponMapper, UserC
         //分别记录：
         // + 拥有相同优惠券id的方案中，记录下优惠最高的方案
         // + 拥有相同优惠金额的方案中，记录下使用优惠券最少的方案
-        //<优惠券ids，最高优惠的方案>
+        //<相同的优惠券，最高的优惠金额>
         Map<String, CouponDiscountDTO> moreDiscountMap = new HashMap<>();
-        //<优惠金额，最少优惠券的方案>
+        //<相同的优惠金额，最少的优惠券>
         Map<Integer, CouponDiscountDTO> lessCouponMap = new HashMap<>();
 
         //2.遍历优惠方案
@@ -591,18 +622,18 @@ public class UserCouponMqServiceImpl extends ServiceImpl<UserCouponMapper, UserC
                     .collect(Collectors.joining(","));
             //2.2比较旧方案和当前方案的优惠金额
             CouponDiscountDTO old = moreDiscountMap.get(ids);
-            //如果旧方案优惠金额大于等于当前方案优惠金额，则跳过当前方案(不更新)
+            //如果旧方案优惠金额大于等于当前方案优惠金额，则跳过当前方案(也不更新最少用券Map，因为该方案优惠金额都是不是最大了，还更新最少用券Map干啥，优惠金额优先！第一个也是展示最多优惠的方案)
             if(old != null && old.getDiscountAmount() >= solution.getDiscountAmount()){
                 continue;
             }
             //2.3比较当前方案优惠金额的优惠券数量和map中记录的该金额的优惠券数量
             old = lessCouponMap.get(solution.getDiscountAmount()); //取出该优惠券的金额，查询该金额旧的记录
-            if(old!= null && old.getIds().size()>1 && old.getIds().size() <= solution.getIds().size()){ //old.getIds().size()>1 为只比较组合，不比较单券
+            if(old!= null && old.getIds().size()>1 && old.getIds().size() <= solution.getIds().size()){ //old.getIds().size()>1 为只比较组合，不比较单券，因为金额相同的两个方案里单券已经是最优的
                 continue;
             }
             //2.4说明当前方案更优。更新两个MAP的记录
-            moreDiscountMap.put(ids, solution); //更新该ids的优惠方案
-            lessCouponMap.put(solution.getDiscountAmount(), solution); //更新该金额的优惠方案
+            moreDiscountMap.put(ids, solution); //更新最高金额优惠方案
+            lessCouponMap.put(solution.getDiscountAmount(), solution); //更新最少用券优惠方案
         }
 
         //3.求moreDiscountMap和lessCouponMap中交集，得出最佳方案集合(去掉了solutions中ids重复的优惠方案，只取出优惠力度最大的其中一个方案)
@@ -614,9 +645,16 @@ public class UserCouponMqServiceImpl extends ServiceImpl<UserCouponMapper, UserC
         return latestBestSolutions;
     }
 
+    /**
+     * 计算某方案的优惠明细
+     * @param availableCouponsMap Map <优惠券，可用课程集合>
+     * @param orderCourses 订单中的课程列表 (用于记录每个课程的优惠明细)
+     * @param couponList 方案中的优惠券排列顺序
+     * @return 该方案优惠情况
+     */
     private CouponDiscountDTO calculateSolutionDiscount(Map<Coupon, List<OrderCourseDTO>> availableCouponsMap, List<OrderCourseDTO> orderCourses, List<Coupon> couponList) {
         CouponDiscountDTO discountDTO = new CouponDiscountDTO();
-        //1.建立优惠明细映射<商品id，优惠金额>
+        //1.建立优惠明细映射Map<课程id，优惠金额>
         Map<Long, Integer> courseDiscountMap = orderCourses.stream().collect(Collectors.toMap(OrderCourseDTO::getId, orderCourseDTO -> 0)); //初始化每个商品的已优惠金额为0
         discountDTO.setDiscountDetail(courseDiscountMap); //结果设置优惠明细
         //2.计算该方案明细
@@ -627,12 +665,12 @@ public class UserCouponMqServiceImpl extends ServiceImpl<UserCouponMapper, UserC
             //2.3.计算目前【剩余】的可优惠课程的总价(课程原价-对应优惠明细)
             int price = courses.stream().mapToInt(course -> course.getPrice() - courseDiscountMap.get(course.getId())).sum();
             //2.4.判断总价是否符合该优惠券门槛
-            Discount discount = DiscountStrategy.getDiscount(coupon.getDiscountType()); //得到该优惠券的计算策略
-            if(!discount.canUse(price, coupon)) continue;
+            Discount discount = DiscountStrategy.getDiscount(coupon.getDiscountType()); //得到该优惠券的策略
+            if(!discount.canUse(price, coupon)) continue; //如果不满足门槛则判断下一张优惠券
             //2.5.计算总优惠金额
             int discountPrice = discount.calculateDiscount(price, coupon);
             //2.6.将总优惠金额分摊到每个可优惠课程的优惠明细中
-            //无返回值，只是更新了优惠明细映射，方便下张优惠券来计算优惠金额
+            //无返回值，只是更新优惠明细映射，方便下张优惠券来计算优惠金额
             calculateDetailDiscount(courseDiscountMap, orderCourses, discountPrice, price);
             //2.8.保存该优惠券id到本方案中
             discountDTO.getIds().add(coupon.getId());
@@ -645,12 +683,12 @@ public class UserCouponMqServiceImpl extends ServiceImpl<UserCouponMapper, UserC
     }
 
     /**
-     * 目的：优惠券使用后，得到每个可优惠课程的优惠明细
-     * 规则：除了最后一个商品的优惠明细为剩余优惠金额(可优惠总金额 - 前面商品已优惠金额)，其他商品的优惠明细为按比例计算
+     * 目的：一张优惠券使用后，得到每个已优惠课程的优惠明细
+     * 规则：除了最后一个商品的优惠明细为剩余优惠金额(可优惠总金额 - 前面商品已优惠金额)，其他商品的优惠明细为按比例计算。防止因为小数优惠后和总价对不上问题
      * @param courseDiscountMap 优惠明细映射
      * @param orderCourses 可优惠课程集合
-     * @param discountPrice 可优惠金额
-     * @param price 可优惠课程的总价
+     * @param discountPrice 总优惠金额
+     * @param price 【剩余】可优惠课程的金额
      */
     private void calculateDetailDiscount(Map<Long, Integer> courseDiscountMap, List<OrderCourseDTO> orderCourses, int discountPrice, int price) {
         //剩余待分配的优惠金额
@@ -667,8 +705,8 @@ public class UserCouponMqServiceImpl extends ServiceImpl<UserCouponMapper, UserC
                 //更新优惠明细映射
                 // 该课程优惠明细 = 该课程价格 / 可用课程总价 * 优惠金额 (有bug，前者都为int类型，相除为0)
                 // int detailDiscount = orderCourses.get(i).getPrice() / price * discountPrice;
-                // 该课程优惠明细 = 该课程价格 * 优惠金额 / 可用课程总价 (修改计算顺序)
-                detailDiscount = course.getPrice() * discountPrice * price;
+                // 该课程优惠明细 = 该课程价格 * 优惠金额 / 可用课程总价 (修改了计算顺序)
+                detailDiscount = course.getPrice() * discountPrice / price;
                 //更新待分配的优惠金额
                 leftDiscountPrice -= detailDiscount;
             }
@@ -700,14 +738,14 @@ public class UserCouponMqServiceImpl extends ServiceImpl<UserCouponMapper, UserC
                 //2.3查询优惠券的可用课程集合
                 availableCourses = orderCourses.stream().filter(orderCourseDTO -> cateIds.contains(orderCourseDTO.getCateId())).collect(Collectors.toList());
             }
-            //如果该优惠券不存在可用课程，则直接跳过
+            //如果该优惠券指定了类别，但是查询完后不存在可用课程，则直接跳过
             if(CollUtils.isEmpty(availableCourses)) continue;
             //3.要使用该优惠券，所以要计算该优惠券对于自身可用的课程可优惠多少钱
             int price = availableCourses.stream().mapToInt(OrderCourseDTO::getPrice).sum();
             //4.判断该优惠券是否满足使用条件
             boolean canUse = DiscountStrategy.getDiscount(coupon.getDiscountType()).canUse(price, coupon);
             if(canUse){
-                //5.如果优惠券是可用使用的，则将该券添加到结果集中
+                //5.如果优惠券是可使用的，则将该券添加到结果集中
                 map.put(coupon, availableCourses);
             }
         }

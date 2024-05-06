@@ -46,7 +46,7 @@ public class LearningRecordDelayTaskHandler {
 
     //PostConstruct：在此类初始化后，并在属性被输入之后执行
     @PostConstruct
-    //使用该工具类会创建一个新线程，来执行handleDelayTask方法
+    //初始化时会创建一个新线程，来执行handleDelayTask方法
     public void init(){
             CompletableFuture.runAsync(this::handleDelayTask);
     }

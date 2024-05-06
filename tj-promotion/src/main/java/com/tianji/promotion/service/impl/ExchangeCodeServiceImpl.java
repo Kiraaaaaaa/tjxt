@@ -33,7 +33,7 @@ public class ExchangeCodeServiceImpl extends ServiceImpl<ExchangeCodeMapper, Exc
     private final StringRedisTemplate redisTemplate;
 
     @Override
-    @Async("generateExchangeCodeExecutor")
+    @Async("generateExchangeCodeExecutor") //该注解默认使用的是ThreadPoolTaskExecutor线程池，该线程是Springboot对JDK的ThreadPoolExecutor进行的封装，线程池大小为5
     public void asyncGenerateCode(Coupon one) {
         log.debug("异步执行生成兑换码，线程id{}; 线程名称{}", Thread.currentThread().getId(), Thread.currentThread().getName());
         /**
@@ -50,12 +50,12 @@ public class ExchangeCodeServiceImpl extends ServiceImpl<ExchangeCodeMapper, Exc
         if(increment == null){
             return;
         }
-        //2.使用工具类，批量生成兑换码
+        //2.使用工具类，批量生成兑换码，由于拿到的是最新的id，所以我们要计算出第一个id是多少
         int startId = increment.intValue() - totalNum + 1;
         List<ExchangeCode> codes = new ArrayList<>();
         for (int serialId = startId; serialId <= increment.intValue(); serialId++) {
             //用兑换码的id+新鲜值，基于类base32的方式来生成一个唯一的兑换码
-            //参数1：兑换码的id，参数2：新鲜值生成所需参数()
+            //参数1：兑换码的id，参数2：新鲜值生成所需参数()，这里直接用优惠券的id，工具会生成0-15的数字，代表16个密钥
             String code = CodeUtil.generateCode(serialId, one.getId());
             ExchangeCode exchangeCode = new ExchangeCode();
             exchangeCode.setCode(code);
@@ -66,7 +66,7 @@ public class ExchangeCodeServiceImpl extends ServiceImpl<ExchangeCodeMapper, Exc
         }
         //3.数据库批量保存兑换码，id就是兑换码的id（非自增）
         saveBatch(codes);
-        //4.将该优惠券的兑换码总数存入redis中<优惠券id，兑换码最大id>
+        //4.将该优惠券的兑换码最大id存入redis中<优惠券id，生成的兑换码最大id>
         redisTemplate.boundZSetOps(PromotionConstants.COUPON_RANGE_KEY).add(one.getId().toString(), increment);
     }
 

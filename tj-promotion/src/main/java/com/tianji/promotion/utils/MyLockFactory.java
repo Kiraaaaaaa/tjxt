@@ -15,7 +15,7 @@ import static com.tianji.promotion.enums.MyLockType.*;
 @Component
 public class MyLockFactory {
 
-    private final Map<MyLockType, Function<String, RLock>> lockHandlers;
+    private final Map<MyLockType, Function<String, RLock>> lockHandlers; //枚举MAP比普通hashmap效率更高
 
     public MyLockFactory(RedissonClient redissonClient) {
         this.lockHandlers = new EnumMap<>(MyLockType.class);

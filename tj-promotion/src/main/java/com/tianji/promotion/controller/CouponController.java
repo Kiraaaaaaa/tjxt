@@ -54,7 +54,7 @@ public class CouponController {
     public CouponDetailVO queryById(@ApiParam("优惠券id") @PathVariable("id") Long id){
         return couponService.queryById(id);
     }
-    @ApiOperation("分页查询优惠券接口-管理端")
+    @ApiOperation("分页查询优惠券列表接口-管理端")
     @GetMapping("/page")
     public PageDTO<CouponPageVO> queryCouponByPage(CouponQuery query){
         return couponService.queryCouponByPage(query);
@@ -66,7 +66,7 @@ public class CouponController {
         couponService.beginIssue(dto);
     }
 
-    @ApiOperation("查询发放中的优惠券列表")
+    @ApiOperation("查询发放中的优惠券列表-用户端")
     @GetMapping("/list")
     public List<CouponVO> queryIssuingCoupons(){
         return couponService.queryIssuingCoupons();

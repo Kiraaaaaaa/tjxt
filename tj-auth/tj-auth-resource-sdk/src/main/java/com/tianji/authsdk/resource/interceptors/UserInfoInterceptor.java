@@ -32,7 +32,7 @@ public class UserInfoInterceptor implements HandlerInterceptor {
 
     @Override
     public void afterCompletion(HttpServletRequest request, HttpServletResponse response, Object handler, Exception ex) throws Exception {
-        // 清理用户信息
+        // 清理用户信息（视图被渲染后就会执行）
         UserContext.removeUser();
     }
 }

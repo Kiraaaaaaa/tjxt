@@ -35,14 +35,15 @@ public class MybatisConfig {
             DynamicTableNameInnerInterceptor dynamicTableNameInnerInterceptor
     ) {
         MybatisPlusInterceptor interceptor = new MybatisPlusInterceptor();
+        //添加插件是有顺序的，这里需要先添加动态表名插件
         if (dynamicTableNameInnerInterceptor != null) {
-            //存在则添加动态表名拦截器
+            //存在则添加动态表名拦截器插件
             interceptor.addInnerInterceptor(dynamicTableNameInnerInterceptor);
         }
         PaginationInnerInterceptor paginationInnerInterceptor = new PaginationInnerInterceptor(DbType.MYSQL);
         paginationInnerInterceptor.setMaxLimit(200L);
-        interceptor.addInnerInterceptor(paginationInnerInterceptor);
-        interceptor.addInnerInterceptor(new MyBatisAutoFillInterceptor());
+        interceptor.addInnerInterceptor(paginationInnerInterceptor); //分页插件
+        interceptor.addInnerInterceptor(new MyBatisAutoFillInterceptor()); //自动填充插件
         return interceptor;
     }
 }

@@ -11,6 +11,7 @@ import java.util.concurrent.TimeUnit;
 @Retention(RetentionPolicy.RUNTIME)
 @Target(ElementType.METHOD)
 public @interface MyLock {
+
     //设置锁的名字
     String name();
 

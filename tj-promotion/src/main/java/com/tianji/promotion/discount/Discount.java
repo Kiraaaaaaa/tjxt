@@ -13,7 +13,6 @@ public interface Discount {
      * @return 是否可以使用优惠券
      */
     boolean canUse(int totalAmount, Coupon coupon);
-
     /**
      * 计算折扣金额
      * @param totalAmount 总金额
@@ -21,7 +20,6 @@ public interface Discount {
      * @return 折扣金额
      */
     int calculateDiscount(int totalAmount, Coupon coupon);
-
     /**
      * 根据优惠券规则返回规则描述信息
      * @return 规则描述信息

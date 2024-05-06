@@ -12,7 +12,7 @@ import java.util.List;
 import java.util.Map;
 
 @Data
-@ApiModel(description = "订单的可用优惠券及折扣信息")
+@ApiModel(description = "订单的可用优惠券及折扣信息，注意这是方案")
 @NoArgsConstructor
 @AllArgsConstructor
 @Accessors(chain = true)
@@ -26,5 +26,4 @@ public class CouponDiscountDTO {
 
     @ApiModelProperty("优惠明细，key为课程id，value为课程优惠金额")
     private Map<Long, Integer> discountDetail;
-
 }

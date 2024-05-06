@@ -20,7 +20,7 @@ public class LikedTimesCheckTask {
     private final ILikedRecordService recordService;
 
     /**
-     * 每20秒检查一次点赞次数，每个业务每次发送30个
+     * 每20秒检查一次点赞次数，每个业务类型每次发送30个业务总点赞记录
      *
      */
     @Scheduled(fixedDelay = 20000)

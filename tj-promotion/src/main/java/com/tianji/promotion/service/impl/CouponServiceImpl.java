@@ -104,7 +104,7 @@ public class CouponServiceImpl extends ServiceImpl<CouponMapper, Coupon> impleme
             return PageDTO.empty(page);
         }
         //2.数据一致，直接封装返回
-            List<CouponPageVO> vos = BeanUtils.copyList(records, CouponPageVO.class);
+        List<CouponPageVO> vos = BeanUtils.copyList(records, CouponPageVO.class);
         return PageDTO.of(page, vos);
     }
 
@@ -185,7 +185,7 @@ public class CouponServiceImpl extends ServiceImpl<CouponMapper, Coupon> impleme
         if(one == null){
             throw new BadRequestException("该优惠券不存在");
         }
-        //如果状态不是待发放或者暂停，则抛出异常
+        //如果状态不是待发放和暂停状态，则抛出异常
         if(one.getStatus()!=CouponStatus.DRAFT.getValue() && one.getStatus()!=CouponStatus.PAUSE.getValue()){
             throw new BizIllegalException("只有待发放和暂停中的优惠券才能进行发放");
         }
@@ -223,6 +223,7 @@ public class CouponServiceImpl extends ServiceImpl<CouponMapper, Coupon> impleme
         // }else{
         //     coupon.setStatus(CouponStatus.UN_ISSUE.getValue());
         // }
+
         //4.更新该优惠券
         updateById(one);
 
@@ -236,8 +237,9 @@ public class CouponServiceImpl extends ServiceImpl<CouponMapper, Coupon> impleme
             redisTemplate.boundHashOps(key).put("userLimit", String.valueOf(one.getUserLimit()));
 
         }
-        //6.如果优惠券状态为指定发放，且优惠券之前的状态为待发放，则生成兑换码
+        //6.如果优惠券状态之前状态为指定发放，和待发放，才会生成兑换码(如果之前状态是暂停状态，发放就会导致生成两次兑换码)
         if(one.getObtainWay() == ObtainType.ISSUE && isDraft){
+            //异步生成兑换码
             exchangeCodeService.asyncGenerateCode(one);
         }
     }
@@ -257,7 +259,7 @@ public class CouponServiceImpl extends ServiceImpl<CouponMapper, Coupon> impleme
         //获取当前用户所有发放中的优惠券
         List<UserCoupon> userCoupons = userCouponService.lambdaQuery()
                 .eq(UserCoupon::getUserId, UserContext.getUser())
-                .in(UserCoupon::getCouponId, ids) //由于用户的优惠券表只有优惠券使用状态，但是这里需要查询发放状态的优惠券，所有用in
+                .in(UserCoupon::getCouponId, ids) //由于用户的优惠券表只有优惠券使用状态，但是这里需要查询发放状态的优惠券，所以用in
                 .list();
 
         //2.1统计当前用户发放中【已经领取】的优惠券数量<优惠券id，已领取数量>
@@ -272,6 +274,7 @@ public class CouponServiceImpl extends ServiceImpl<CouponMapper, Coupon> impleme
         //         map.put(couponId, 1L);
         //     }
         // }
+
         // 传统写法2
         // Map<Long, Long> map = new HashMap<>();
         // for (UserCoupon userCoupon : userCoupons) {
@@ -285,22 +288,29 @@ public class CouponServiceImpl extends ServiceImpl<CouponMapper, Coupon> impleme
         //     }
         // }
 
+        // 传统写法3
+        // Map<Long, Long> map = new HashMap<>();
+        // for (UserCoupon userCoupon : userCoupons) {
+        //     map.put(userCoupon.getCouponId(), map.getOrDefault(userCoupon.getCouponId(), 0L) + 1);
+        // }
+
         // stream流写法
         Map<Long, Long> getCouponsMap = userCoupons.stream().collect(Collectors.groupingBy(UserCoupon::getCouponId, Collectors.counting()));
-        //2.2统计当前用户【已经领取且未使用】的优惠券数量<优惠券id，未使用数量>
+        //2.2统计当前用户【已经领取 且 未使用】的优惠券数量<优惠券id，未使用数量>
         Map<Long, Long> unUsedCouponsMap = userCoupons.stream()
                 .filter(c->c.getStatus() == UserCouponStatus.UNUSED)
                 .collect(Collectors.groupingBy(UserCoupon::getCouponId, Collectors.counting()));
         //3.封装vos
         List<CouponVO> vos = coupons.stream().map(i -> {
             CouponVO couponVO = BeanUtils.copyBean(i, CouponVO.class);
+
             //3.1设置该优惠券是否可以领取，优惠券已领取数量IssueNum < 优惠券总数量TotalNum，且用户领取数量 < 优惠券每个人限领数量
             // 已领取数量，没有则为0
             Long getNum = getCouponsMap.getOrDefault(i.getId(), 0L);
             boolean avaliable = (i.getIssueNum() < i.getTotalNum() && getNum.intValue() < i.getUserLimit());
             couponVO.setAvailable(avaliable);
             //3.2该优惠券是否可以使用
-            // 已使用数量
+            // 未使用数量>0则是可用的
             boolean received = unUsedCouponsMap.getOrDefault(i.getId(), 0L) > 0;
             couponVO.setReceived(received);
             return couponVO;

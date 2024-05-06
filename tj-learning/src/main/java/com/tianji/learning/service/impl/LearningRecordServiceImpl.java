@@ -183,7 +183,7 @@ public class LearningRecordServiceImpl extends ServiceImpl<LearningRecordMapper,
     }
 
     /**
-     * 【已废弃！】数据库操作版本
+     * 【已废弃！】更新学习记录，数据库操作版本
      * 缺点：如果多用户持续观看视频就会导致查、改数据库请求过大
      * 心跳是每15秒发送一次, 并发量可能会过大, 会操作两次数据库:
      * + 查询学习记录表
@@ -261,7 +261,7 @@ public class LearningRecordServiceImpl extends ServiceImpl<LearningRecordMapper,
             nowRecord.setLessonId(recordDTO.getLessonId());
             nowRecord.setSectionId(recordDTO.getSectionId());
             nowRecord.setMoment(recordDTO.getMoment());
-            nowRecord.setFinished(Boolean.FALSE);
+            nowRecord.setFinished(finished);
             nowRecord.setId(oldRecord.getId());
 
             //添加到redis和延时队列
